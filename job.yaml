@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: load-serial-parallel
+  namespace: gc-demo
+spec:
+  schedule: "*/5 * * * *"  # every 5 min
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: load-generator
+              image: curlimages/curl:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Starting load for Serial & Parallel..."
+                  for i in $(seq 1 10); do
+                    echo "Iteration $i"
+                    curl -s -m 20 -X POST http://perf-demo-serial-svc:8080/load -o /dev/null
+                    curl -s -m 20 -X POST http://perf-demo-parallel-svc:8080/load -o /dev/null
+                    echo ""
+                    sleep 1
+                  done
+                  echo "Load finished."
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: load-modern-gcs
+  namespace: gc-demo
+spec:
+  schedule: "*/5 * * * *"  # every 5 min
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: load-generator
+              image: curlimages/curl:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Starting load for G1, ZGC, Shenandoah..."
+                  for i in $(seq 1 10); do
+                    echo "Iteration $i"
+                    curl -s -m 10 -X POST http://perf-demo-g1-svc:8080/load -o /dev/null
+                    curl -s -m 10 -X POST http://perf-demo-zgc-svc:8080/load -o /dev/null
+                    curl -s -m 10 -X POST http://perf-demo-shenandoah-svc:8080/load -o /dev/null
+                    echo ""
+                    sleep 1
+                  done
+                  echo "Load finished."

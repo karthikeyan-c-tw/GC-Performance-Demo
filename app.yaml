@@ -35,9 +35,21 @@ spec:
               memory: "1Gi"
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms500m -Xmx500m -XX:+UseG1GC"
+              value: "-Xms1g -Xmx1g -XX:+UseG1GC"
           ports:
             - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -71,9 +83,21 @@ spec:
               memory: "1Gi"
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms500m -Xmx500m -XX:+UseZGC"
+              value: "-Xms800m -Xmx800m -XX:+UseZGC"
           ports:
             - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -107,231 +131,21 @@ spec:
               memory: "1Gi"
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms500m -Xmx500m -XX:+UseShenandoahGC"
+              value: "-Xms1g -Xmx1g -XX:+UseShenandoahGC"
           ports:
             - containerPort: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: perf-demo-g1-svc
-  namespace: gc-demo
-  labels:
-    app: perf-demo-g1
-    gc: g1
-spec:
-  selector:
-    app: perf-demo-g1
-    gc: g1
-  ports:
-    - name: http
-      port: 8080
-      targetPort: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: perf-demo-zgc-svc
-  namespace: gc-demo
-  labels:
-    app: perf-demo-zgc
-    gc: zgc
-spec:
-  selector:
-    app: perf-demo-zgc
-    gc: zgc
-  ports:
-    - name: http
-      port: 8080
-      targetPort: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: perf-demo-shenandoah-svc
-  namespace: gc-demo
-  labels:
-    app: perf-demo-shenandoah
-    gc: shenandoah
-spec:
-  selector:
-    app: perf-demo-shenandoah
-    gc: shenandoah
-  ports:
-    - name: http
-      port: 8080
-      targetPort: 8080
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: prometheus-config
-  namespace: gc-demo
-data:
-  prometheus.yml: |
-    global:
-      scrape_interval: 15s
-
-    scrape_configs:
-      - job_name: 'perf-demo'
-        kubernetes_sd_configs:
-          - role: endpoints
-            namespaces:
-              names:
-                - gc-demo
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_service_label_app]
-            action: keep
-            regex: perf-demo.*
-          - source_labels: [__meta_kubernetes_endpoint_port_name]
-            action: keep
-            regex: http
-          - source_labels: [__meta_kubernetes_service_label_gc]
-            target_label: gc
-        metrics_path: /actuator/prometheus
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: prometheus
-  namespace: gc-demo
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: prometheus
-  template:
-    metadata:
-      labels:
-        app: prometheus
-    spec:
-      serviceAccountName: prometheus
-      containers:
-        - name: prometheus
-          image: prom/prometheus:v2.55.1
-          args:
-            - "--config.file=/etc/prometheus/prometheus.yml"
-            - "--storage.tsdb.path=/prometheus/"
-            - "--web.enable-lifecycle"
-          ports:
-            - containerPort: 9090
-          volumeMounts:
-            - name: config-volume
-              mountPath: /etc/prometheus
-            - name: prometheus-storage
-              mountPath: /prometheus
-      volumes:
-        - name: config-volume
-          configMap:
-            name: prometheus-config
-        - name: prometheus-storage
-          emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: prometheus
-  namespace: gc-demo
-spec:
-  selector:
-    app: prometheus
-  ports:
-    - name: http
-      port: 9090
-      targetPort: 9090
-  type: NodePort
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: prometheus
-  namespace: gc-demo
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: prometheus
-rules:
-  - apiGroups: [""]
-    resources: ["nodes","nodes/proxy","services","endpoints","pods"]
-    verbs: ["get","list","watch"]
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: prometheus
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: prometheus
-subjects:
-  - kind: ServiceAccount
-    name: prometheus
-    namespace: gc-demo
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: grafana-datasources
-  namespace: gc-demo
-data:
-  datasources.yaml: |
-    apiVersion: 1
-    datasources:
-      - name: Prometheus
-        type: prometheus
-        access: proxy
-        url: http://prometheus.gc-demo.svc.cluster.local:9090
-        isDefault: true
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: grafana
-  namespace: gc-demo
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: grafana
-  template:
-    metadata:
-      labels:
-        app: grafana
-    spec:
-      containers:
-        - name: grafana
-          image: grafana/grafana:10.4.2
-          ports:
-            - containerPort: 3000
-          volumeMounts:
-            - name: grafana-storage
-              mountPath: /var/lib/grafana
-            - name: grafana-datasources
-              mountPath: /etc/grafana/provisioning/datasources
-      volumes:
-        - name: grafana-storage
-          emptyDir: {}
-        - name: grafana-datasources
-          configMap:
-            name: grafana-datasources
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: grafana
-  namespace: gc-demo
-spec:
-  selector:
-    app: grafana
-  ports:
-    - name: http
-      port: 3000
-      targetPort: 3000
-  type: NodePort
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -365,26 +179,21 @@ spec:
               memory: "1Gi"
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms500m -Xmx500m -XX:+UseSerialGC"
+              value: "-Xms1g -Xmx1g -XX:+UseSerialGC"
           ports:
             - containerPort: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: perf-demo-serial-svc
-  namespace: gc-demo
-  labels:
-    app: perf-demo-serial
-    gc: serial
-spec:
-  selector:
-    app: perf-demo-serial
-    gc: serial
-  ports:
-    - name: http
-      port: 8080
-      targetPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -418,23 +227,18 @@ spec:
               memory: "1Gi"
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms500m -Xmx500m -XX:+UseParallelGC"
+              value: "-Xms1g -Xmx1g -XX:+UseParallelGC"
           ports:
             - containerPort: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: perf-demo-parallel-svc
-  namespace: gc-demo
-  labels:
-    app: perf-demo-parallel
-    gc: parallel
-spec:
-  selector:
-    app: perf-demo-parallel
-    gc: parallel
-  ports:
-    - name: http
-      port: 8080
-      targetPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
